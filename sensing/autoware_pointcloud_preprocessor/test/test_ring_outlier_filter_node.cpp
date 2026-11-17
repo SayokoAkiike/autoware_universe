@@ -518,9 +518,8 @@ TEST_F(RingOutlierFilterTest, OutlierCloudContainsEveryPointOfAnOutlierWalk)
 TEST_F(RingOutlierFilterTest, OutlierCloudContainsLastPointOfTheLastOutlierWalk)
 {
   // Arrange
-  // A long arc at 8 m is kept. It is followed by three points at 5 m that end the ring. The last
-  // point of a ring is never visited as the start of a pair, so the last walk is the two points
-  // before it, which are 0.1 deg apart and therefore an outlier walk.
+  // A long arc at 8 m is kept. It is followed by three points at 5 m, 0.1 deg apart, that end the
+  // ring. They form the last walk of the ring, which is too short and therefore an outlier walk.
   pcl::PointCloud<PointXYZIRCAEDT> cloud;
   for (int i = 0; i < 20; ++i) {
     cloud.push_back(make_point(0, (10.0F + 0.1F * static_cast<float>(i)) * deg_to_rad, 8.0F));
@@ -533,10 +532,57 @@ TEST_F(RingOutlierFilterTest, OutlierCloudContainsLastPointOfTheLastOutlierWalk)
   const auto outliers = filter_and_capture_outliers(cloud);
 
   // Assert
-  // Both points of the last walk are published, including its last point.
-  ASSERT_EQ(outliers.size(), 2U);
+  // All three points of the last walk are published, including the last point of the ring.
+  ASSERT_EQ(outliers.size(), 3U);
   EXPECT_FLOAT_EQ(outliers[0].azimuth, cloud.points[20].azimuth);
   EXPECT_FLOAT_EQ(outliers[1].azimuth, cloud.points[21].azimuth);
+  EXPECT_FLOAT_EQ(outliers[2].azimuth, cloud.points[22].azimuth);
+}
+
+TEST_F(RingOutlierFilterTest, LastPointOfEveryRingIsKept)
+{
+  // Arrange
+  // Two rings, each a single long arc that is kept as one walk.
+  RingOutlierFilterComponentPublic node(make_node_options());
+  pcl::PointCloud<PointXYZIRCAEDT> cloud;
+  append_arc(cloud, 0, 10.0F, 20);
+  append_arc(cloud, 1, 10.0F, 20);
+  sensor_msgs::msg::PointCloud2 output;
+
+  // Act
+  node.faster_filter(to_msg(cloud), nullptr, output, TransformInfo{});
+
+  // Assert
+  // Every input point is kept, including the last point of each ring.
+  const auto points = extract_points(output);
+  ASSERT_EQ(points.size(), cloud.size());
+  EXPECT_FLOAT_EQ(points[19].x, cloud.points[19].x);
+  EXPECT_FLOAT_EQ(points[19].y, cloud.points[19].y);
+  EXPECT_EQ(points[19].channel, 0U);
+  EXPECT_FLOAT_EQ(points[39].x, cloud.points[39].x);
+  EXPECT_FLOAT_EQ(points[39].y, cloud.points[39].y);
+  EXPECT_EQ(points[39].channel, 1U);
+}
+
+TEST_F(RingOutlierFilterTest, IsolatedLastPointOfARingIsRemoved)
+{
+  // Arrange
+  // A long arc at 5 m is kept. The last point of the ring is at 8 m, so the distance ratio ends the
+  // walk before it, and the point forms a walk of its own, which is too short to be kept.
+  RingOutlierFilterComponentPublic node(make_node_options());
+  pcl::PointCloud<PointXYZIRCAEDT> cloud;
+  append_arc(cloud, 0, 10.0F, 20);
+  cloud.push_back(make_point(0, 12.0F * deg_to_rad, 8.0F));
+  sensor_msgs::msg::PointCloud2 output;
+
+  // Act
+  node.faster_filter(to_msg(cloud), nullptr, output, TransformInfo{});
+
+  // Assert
+  // The arc is kept and the isolated last point is removed.
+  const auto points = extract_points(output);
+  ASSERT_EQ(points.size(), 20U);
+  EXPECT_FLOAT_EQ(points.back().x, cloud.points[19].x);
 }
 
 int main(int argc, char ** argv)
